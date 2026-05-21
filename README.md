@@ -13,35 +13,70 @@ Extract guitar tab panels from YouTube tutorials into a printable PDF.
 
 ---
 
-## Local Development
+## Running Locally
 
 ### Prerequisites
 
+- Python 3.12
 - Node.js 18+
-- Python 3.11+
-- `ffmpeg` installed on your system (`brew install ffmpeg` on Mac)
-- `yt-dlp` installed (`pip install yt-dlp` or `brew install yt-dlp`)
+- ffmpeg: `brew install ffmpeg`
 
-### Backend
+### Setup
+
+**1. Clone and create the virtual environment**
 
 ```bash
+git clone <repo-url>
+cd getTabs
+python3.12 -m venv venv
+source venv/bin/activate
+```
+
+**2. Install backend dependencies**
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+**3. Configure the frontend**
+
+```bash
+echo 'NEXT_PUBLIC_API_URL=http://localhost:8000' > frontend/.env.local
+```
+
+**4. Terminal 1 — backend**
+
+```bash
+source venv/bin/activate   # if not already active
 cd backend
-pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-Backend runs at http://localhost:8000
-
-### Frontend
+**5. Terminal 2 — frontend**
 
 ```bash
 cd frontend
-cp .env.local.example .env.local
 npm install
 npm run dev
 ```
 
-Frontend runs at http://localhost:3000
+Both processes must run simultaneously. Backend is at http://localhost:8000, frontend at http://localhost:3000.
+
+---
+
+## Switching between local and deployed backend
+
+The frontend reads the backend URL from `frontend/.env.local`. Swap the value to point at whichever backend you want:
+
+```bash
+# Local backend
+echo 'NEXT_PUBLIC_API_URL=http://localhost:8000' > frontend/.env.local
+
+# Deployed backend (Render)
+echo 'NEXT_PUBLIC_API_URL=https://<your-app>.onrender.com' > frontend/.env.local
+```
+
+Restart `npm run dev` after changing `.env.local` for Next.js to pick up the new value.
 
 ---
 
