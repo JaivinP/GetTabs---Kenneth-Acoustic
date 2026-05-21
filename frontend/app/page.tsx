@@ -151,7 +151,7 @@ export default function Home() {
       >
         <div className="flex items-center gap-3">
           <span className="font-mono font-semibold text-lg tracking-tight" style={{ color: "var(--accent)" }}>
-            TABCAPTURE
+            GetTabs - Kenneth Acoustic
           </span>
           <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#ffffff15", color: "#aaa" }}>
             beta

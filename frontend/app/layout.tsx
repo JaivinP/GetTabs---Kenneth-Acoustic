@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TabCapture",
+  title: "GetTabs",
   description: "Extract guitar tabs from YouTube tutorials into a printable PDF",
 };
 
