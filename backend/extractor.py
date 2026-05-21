@@ -160,17 +160,8 @@ def detect_panel_jumps(frames: list, fps: float = 4.0) -> list:
     return jump_indices
 
 
-def extract_panels(url: str) -> list:
-    """
-    Full pipeline: download → frames → detect jumps → return panel images.
-    Returns list of {id, image} dicts with base64 PNG of the full tab crop.
-    """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        video_path = os.path.join(tmpdir, "video.mp4")
-        download_video(url, video_path)
-        fps = 4.0
-        frames = extract_frames(video_path, fps=fps)
-
+def _build_panels(frames: list, fps: float = 4.0) -> list:
+    """Shared pipeline: frames → detect jumps → panel image dicts."""
     if not frames:
         raise RuntimeError("No frames extracted from video")
 
@@ -183,5 +174,25 @@ def extract_panels(url: str) -> list:
             "id": str(uuid.uuid4()),
             "image": frame_to_base64(tab_crop),
         })
-
     return panels
+
+
+def extract_panels(url: str) -> list:
+    """Full pipeline: download → frames → detect jumps → return panel image dicts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "video.mp4")
+        download_video(url, video_path)
+        fps = 4.0
+        frames = extract_frames(video_path, fps=fps)
+    return _build_panels(frames, fps=fps)
+
+
+def extract_panels_from_file(file_bytes: bytes) -> list:
+    """File-upload pipeline: save bytes → frames → detect jumps → return panel image dicts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "upload.mp4")
+        with open(video_path, "wb") as f:
+            f.write(file_bytes)
+        fps = 4.0
+        frames = extract_frames(video_path, fps=fps)
+    return _build_panels(frames, fps=fps)

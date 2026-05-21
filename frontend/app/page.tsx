@@ -20,11 +20,14 @@ import { SortablePanel } from "@/components/SortablePanel";
 
 type Panel = { id: string; image: string };
 type Status = "idle" | "loading" | "done" | "error";
+type Mode = "url" | "file";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function Home() {
+  const [mode, setMode] = useState<Mode>("url");
   const [url, setUrl] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [panels, setPanels] = useState<Panel[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -37,34 +40,28 @@ export default function Home() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  const handleExtract = async () => {
-    if (!url.trim()) return;
+  const canExtract =
+    status !== "loading" && (mode === "url" ? !!url.trim() : !!file);
+
+  const runExtraction = async (fetchFn: () => Promise<Response>, defaultTitle: string) => {
     setStatus("loading");
     setError("");
     setPanels([]);
-    setProgress("Downloading video...");
+    setProgress(mode === "url" ? "Downloading video..." : "Reading video...");
+
+    const progressMessages =
+      mode === "url"
+        ? ["Downloading video...", "Extracting frames...", "Detecting panel changes...", "Almost done..."]
+        : ["Reading video...", "Extracting frames...", "Detecting panel changes...", "Almost done..."];
+
+    let msgIdx = 0;
+    const interval = setInterval(() => {
+      msgIdx = Math.min(msgIdx + 1, progressMessages.length - 1);
+      setProgress(progressMessages[msgIdx]);
+    }, 8000);
 
     try {
-      // Poll for progress via a simple fetch — FastAPI streams logs via stderr
-      // For now just show generic messages while we wait
-      const progressMessages = [
-        "Downloading video...",
-        "Extracting frames...",
-        "Detecting panel changes...",
-        "Almost done...",
-      ];
-      let msgIdx = 0;
-      const interval = setInterval(() => {
-        msgIdx = Math.min(msgIdx + 1, progressMessages.length - 1);
-        setProgress(progressMessages[msgIdx]);
-      }, 8000);
-
-      const res = await fetch(`${API_URL}/extract`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-
+      const res = await fetchFn();
       clearInterval(interval);
 
       if (!res.ok) {
@@ -75,15 +72,36 @@ export default function Home() {
       const data = await res.json();
       setPanels(data.panels);
       setStatus("done");
-
-      // Auto-fill title from URL if not set
-      if (!title) {
-        const match = url.match(/[?&]v=([^&]+)/);
-        setTitle(match ? `Tab_${match[1]}` : "Guitar_Tab");
-      }
+      if (!title) setTitle(defaultTitle);
     } catch (e: any) {
+      clearInterval(interval);
       setError(e.message || "Something went wrong");
       setStatus("error");
+    }
+  };
+
+  const handleExtract = () => {
+    if (mode === "url") {
+      if (!url.trim()) return;
+      const match = url.match(/[?&]v=([^&]+)/);
+      const defaultTitle = match ? `Tab_${match[1]}` : "Guitar_Tab";
+      runExtraction(
+        () =>
+          fetch(`${API_URL}/extract`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+          }),
+        defaultTitle
+      );
+    } else {
+      if (!file) return;
+      const defaultTitle = file.name.replace(/\.[^.]+$/, "") || "Guitar_Tab";
+      runExtraction(() => {
+        const form = new FormData();
+        form.append("file", file);
+        return fetch(`${API_URL}/extract-file`, { method: "POST", body: form });
+      }, defaultTitle);
     }
   };
 
@@ -156,40 +174,94 @@ export default function Home() {
         )}
       </header>
 
-      {/* URL Input */}
+      {/* Input area */}
       <div className="max-w-3xl mx-auto px-6 pt-10 pb-6">
-        <div className="mb-2">
-          <label className="font-mono text-xs tracking-widest uppercase" style={{ color: "var(--muted)" }}>
-            YouTube URL
-          </label>
+        {/* Mode toggle */}
+        <div className="flex mb-4 rounded overflow-hidden border" style={{ borderColor: "#ddd", width: "fit-content" }}>
+          {(["url", "file"] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className="font-mono text-xs px-4 py-1.5 transition-colors"
+              style={{
+                background: mode === m ? "var(--ink)" : "#fff",
+                color: mode === m ? "#fff" : "var(--muted)",
+              }}
+            >
+              {m === "url" ? "YouTube URL" : "Upload File"}
+            </button>
+          ))}
         </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleExtract()}
-            placeholder="https://www.youtube.com/watch?v=..."
-            className="flex-1 font-mono text-sm px-4 py-3 rounded border outline-none transition-all"
-            style={{
-              background: "#fff",
-              border: "1.5px solid #ddd",
-              color: "var(--ink)",
-            }}
-          />
-          <button
-            onClick={handleExtract}
-            disabled={status === "loading" || !url.trim()}
-            className="font-mono text-sm font-semibold px-6 py-3 rounded transition-all"
-            style={{
-              background: status === "loading" ? "#ccc" : "var(--ink)",
-              color: "#fff",
-              cursor: status === "loading" ? "not-allowed" : "pointer",
-            }}
-          >
-            {status === "loading" ? "Working..." : "Extract"}
-          </button>
-        </div>
+
+        {mode === "url" ? (
+          <>
+            <div className="mb-2">
+              <label className="font-mono text-xs tracking-widest uppercase" style={{ color: "var(--muted)" }}>
+                YouTube URL
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && canExtract && handleExtract()}
+                placeholder="https://www.youtube.com/watch?v=..."
+                className="flex-1 font-mono text-sm px-4 py-3 rounded border outline-none"
+                style={{ background: "#fff", border: "1.5px solid #ddd", color: "var(--ink)" }}
+              />
+              <button
+                onClick={handleExtract}
+                disabled={!canExtract}
+                className="font-mono text-sm font-semibold px-6 py-3 rounded transition-all"
+                style={{
+                  background: !canExtract ? "#ccc" : "var(--ink)",
+                  color: "#fff",
+                  cursor: !canExtract ? "not-allowed" : "pointer",
+                }}
+              >
+                {status === "loading" ? "Working..." : "Extract"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex gap-2 items-stretch">
+              <label
+                className="flex-1 flex flex-col items-center justify-center gap-1 rounded border-2 border-dashed cursor-pointer py-6 transition-colors"
+                style={{
+                  borderColor: file ? "var(--ink)" : "#ccc",
+                  background: file ? "#f9f9f7" : "#fff",
+                }}
+              >
+                <input
+                  type="file"
+                  accept="video/*"
+                  className="hidden"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                />
+                <span className="font-mono text-sm" style={{ color: file ? "var(--ink)" : "#aaa" }}>
+                  {file ? file.name : "Click to choose a video file"}
+                </span>
+                {!file && (
+                  <span className="text-xs" style={{ color: "#bbb" }}>mp4, mov, webm…</span>
+                )}
+              </label>
+              <button
+                onClick={handleExtract}
+                disabled={!canExtract}
+                className="font-mono text-sm font-semibold px-6 rounded transition-all"
+                style={{
+                  background: !canExtract ? "#ccc" : "var(--ink)",
+                  color: "#fff",
+                  cursor: !canExtract ? "not-allowed" : "pointer",
+                }}
+              >
+                {status === "loading" ? "Working..." : "Extract"}
+              </button>
+            </div>
+          </>
+        )}
 
         {/* Title input — shown after extraction */}
         {status === "done" && (
@@ -213,7 +285,7 @@ export default function Home() {
         <div className="max-w-3xl mx-auto px-6 py-12 text-center">
           <div className="inline-flex flex-col items-center gap-4">
             <div
-              className="w-10 h-10 rounded-full border-2 border-t-transparent animate-spin"
+              className="w-10 h-10 rounded-full border-2 animate-spin"
               style={{ borderColor: "var(--accent)", borderTopColor: "transparent" }}
             />
             <p className="font-mono text-sm" style={{ color: "var(--muted)" }}>
@@ -239,7 +311,9 @@ export default function Home() {
       {status === "idle" && (
         <div className="max-w-3xl mx-auto px-6 py-12 text-center">
           <p className="font-mono text-sm" style={{ color: "var(--muted)" }}>
-            Paste a YouTube guitar tutorial URL and hit Extract.
+            {mode === "url"
+              ? "Paste a YouTube guitar tutorial URL and hit Extract."
+              : "Upload a local video file and hit Extract."}
           </p>
           <p className="text-xs mt-2" style={{ color: "#bbb" }}>
             Works with tutorials that show a scrolling tab overlay at the bottom.
