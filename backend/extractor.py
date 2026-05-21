@@ -12,17 +12,12 @@ from pathlib import Path
 TAB_ROW_START = 0.68   # tab panel starts at 68% down the full frame
 
 # ── Diff region (relative to tab crop) ─────────────────────────────────────
-# Staff notation area used for change detection. Avoids the chord diagram
-# on the far right and the very top banner, but covers the full staff width
-# so note content in any section triggers a diff on a real panel refresh.
 MEASURE_ROW_START = 0.25
 MEASURE_ROW_END   = 0.97
 MEASURE_COL_START = 0.20
 MEASURE_COL_END   = 0.85
 
 # ── Detection thresholds ────────────────────────────────────────────────────
-# Higher than a full-frame diff because the region is mostly white;
-# a number swap is a large relative change.
 DIFF_THRESHOLD        = 0.028
 MIN_PANEL_GAP_SECONDS = 2.5
 INTRO_SKIP_SECONDS    = 3.0
@@ -46,29 +41,31 @@ def download_video(url: str, output_path: str) -> str:
     return output_path
 
 
-def extract_frames(video_path: str, fps: float = 4.0) -> list:
-    """Extract frames from video at given fps using OpenCV."""
-    print(f"[extractor] Extracting frames at {fps}fps from {video_path}")
+def extract_frames(video_path: str, fps: float = 2.0):
+    """Yield (sampled_index, frame) one at a time — never loads the full video into RAM."""
+    print(f"[extractor] Streaming frames at {fps}fps from {video_path}")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
 
-    video_fps = cap.get(cv2.CAP_PROP_FPS)
+    video_fps     = cap.get(cv2.CAP_PROP_FPS)
+    total_frames  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_interval = max(1, int(video_fps / fps))
+    end_video_frame = int(total_frames * VIDEO_END_FRACTION)
 
-    frames = []
-    frame_idx = 0
+    sampled_idx   = 0
+    video_idx     = 0
     while True:
         ret, frame = cap.read()
-        if not ret:
+        if not ret or video_idx > end_video_frame:
             break
-        if frame_idx % frame_interval == 0:
-            frames.append(frame)
-        frame_idx += 1
+        if video_idx % frame_interval == 0:
+            yield sampled_idx, frame
+            sampled_idx += 1
+        del frame
+        video_idx += 1
 
     cap.release()
-    print(f"[extractor] Extracted {len(frames)} frames")
-    return frames
 
 
 def crop_tab_region(frame: np.ndarray) -> np.ndarray:
@@ -78,17 +75,10 @@ def crop_tab_region(frame: np.ndarray) -> np.ndarray:
 
 
 def crop_measure_number_region(tab_crop: np.ndarray) -> np.ndarray:
-    """Crop the small patch containing the first measure number.
-
-    This region is a digit on a white background and only changes when the
-    panel refreshes, making it a highly reliable diff target.
-    """
+    """Crop the staff notation area used for change detection."""
     h, w = tab_crop.shape[:2]
-    y1 = int(h * MEASURE_ROW_START)
-    y2 = int(h * MEASURE_ROW_END)
-    x1 = int(w * MEASURE_COL_START)
-    x2 = int(w * MEASURE_COL_END)
-    return tab_crop[y1:y2, x1:x2]
+    return tab_crop[int(h * MEASURE_ROW_START):int(h * MEASURE_ROW_END),
+                    int(w * MEASURE_COL_START):int(w * MEASURE_COL_END)]
 
 
 def frame_diff(a: np.ndarray, b: np.ndarray) -> float:
@@ -112,87 +102,78 @@ def frame_to_base64(frame: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("utf-8")
 
 
-def detect_panel_jumps(frames: list, fps: float = 4.0) -> list:
+def detect_panel_jumps(frames, fps: float = 2.0) -> list:
     """
-    Scan frames and return indices where the tab panel jumps to a new set of measures.
+    Consume a frames generator and return panel image dicts.
 
-    Diffs only the tiny measure-number region (first digit above the staff).
-    This patch is static between jumps and changes dramatically on a real
-    panel refresh, regardless of highlights, banners, or chord diagrams.
+    Keeps at most 2 measure crops in memory at any time. Full frames are
+    released immediately after the tab crop is extracted. The panel images
+    (base64 PNG) are encoded on detection and the raw array discarded.
 
     The one-measure overlap between consecutive panels is intentional and is
     handled in the editor.
     """
-    print(f"[extractor] Scanning {len(frames)} frames for panel jumps...")
-
     intro_skip = int(INTRO_SKIP_SECONDS * fps)
     min_gap    = max(1, int(MIN_PANEL_GAP_SECONDS * fps))
 
-    tab_crops    = [crop_tab_region(f) for f in frames]
-    number_crops = [crop_measure_number_region(tc) for tc in tab_crops]
+    panels             = []
+    first_captured     = False
+    last_jump          = 0       # sampled index of last detected jump
+    pending_capture_at = None    # sampled index at which to capture the settled frame
+    prev_measure_crop  = None
 
-    # Find first frame after the intro where the tab overlay is visible
-    first_idx = None
-    for i in range(intro_skip, len(frames)):
-        if is_tab_visible(tab_crops[i]):
-            first_idx = i
-            break
+    for sampled_idx, frame in frames:
+        tab_crop = crop_tab_region(frame)
+        del frame   # release full frame immediately
 
-    if first_idx is None:
-        raise RuntimeError("No tab panel found in video after intro skip")
+        # ── Pending capture: transition has settled, grab this frame ──────────
+        if pending_capture_at is not None and sampled_idx >= pending_capture_at:
+            if is_tab_visible(tab_crop):
+                panels.append({"id": str(uuid.uuid4()), "image": frame_to_base64(tab_crop)})
+                print(f"  Captured panel {len(panels)} at sampled frame {sampled_idx}")
+            pending_capture_at = None
 
-    print(f"  First tab panel at frame {first_idx}")
-    jump_indices = [first_idx]
-    last_jump = 0  # don't debounce against the first capture
+        # ── First visible panel after intro ───────────────────────────────────
+        if not first_captured and sampled_idx >= intro_skip:
+            if is_tab_visible(tab_crop):
+                panels.append({"id": str(uuid.uuid4()), "image": frame_to_base64(tab_crop)})
+                print(f"  First tab panel at sampled frame {sampled_idx}")
+                first_captured = True
+                last_jump = 0
 
-    end_frame = int(len(number_crops) * VIDEO_END_FRACTION)
-    for i in range(first_idx + 1, end_frame):
-        if i - last_jump < min_gap:
-            continue
-        diff = frame_diff(number_crops[i - 1], number_crops[i])
-        if diff > DIFF_THRESHOLD and is_tab_visible(tab_crops[i]):
-            capture = min(i + 2, len(frames) - 1)
-            jump_indices.append(capture)
-            last_jump = i
-            print(f"  Panel jump at frame {i} (diff={diff:.3f}), capturing frame {capture}")
+        # ── Jump detection: diff consecutive measure crops ────────────────────
+        if first_captured:
+            curr_measure_crop = crop_measure_number_region(tab_crop)
+            if prev_measure_crop is not None and sampled_idx - last_jump >= min_gap:
+                diff = frame_diff(prev_measure_crop, curr_measure_crop)
+                if diff > DIFF_THRESHOLD and is_tab_visible(tab_crop):
+                    last_jump          = sampled_idx
+                    pending_capture_at = sampled_idx + 2
+                    print(f"  Panel jump at sampled frame {sampled_idx} (diff={diff:.3f})")
+            del prev_measure_crop
+            prev_measure_crop = curr_measure_crop   # keep only the latest crop
 
-    print(f"[extractor] Found {len(jump_indices)} panels")
-    return jump_indices
+        del tab_crop
 
-
-def _build_panels(frames: list, fps: float = 4.0) -> list:
-    """Shared pipeline: frames → detect jumps → panel image dicts."""
-    if not frames:
-        raise RuntimeError("No frames extracted from video")
-
-    jump_indices = detect_panel_jumps(frames, fps=fps)
-
-    panels = []
-    for idx in jump_indices:
-        tab_crop = crop_tab_region(frames[idx])
-        panels.append({
-            "id": str(uuid.uuid4()),
-            "image": frame_to_base64(tab_crop),
-        })
+    del prev_measure_crop
+    print(f"[extractor] Found {len(panels)} panels")
     return panels
 
 
 def extract_panels(url: str) -> list:
-    """Full pipeline: download → frames → detect jumps → return panel image dicts."""
+    """Full pipeline: download → stream frames → detect jumps → return panel image dicts."""
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "video.mp4")
         download_video(url, video_path)
-        fps = 4.0
-        frames = extract_frames(video_path, fps=fps)
-    return _build_panels(frames, fps=fps)
+        fps = 2.0
+        return detect_panel_jumps(extract_frames(video_path, fps=fps), fps=fps)
 
 
 def extract_panels_from_file(file_bytes: bytes) -> list:
-    """File-upload pipeline: save bytes → frames → detect jumps → return panel image dicts."""
+    """File-upload pipeline: save bytes → stream frames → detect jumps → return panel image dicts."""
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "upload.mp4")
         with open(video_path, "wb") as f:
             f.write(file_bytes)
-        fps = 4.0
-        frames = extract_frames(video_path, fps=fps)
-    return _build_panels(frames, fps=fps)
+        fps = 2.0
+        return detect_panel_jumps(extract_frames(video_path, fps=fps), fps=fps)
