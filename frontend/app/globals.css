@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --paper: #f5f0e8;
+  --ink: #0f0f0f;
+  --tab: #1a1a2e;
+  --accent: #e8a020;
+  --muted: #8a8070;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+}
+
+/* Drag handle cursor */
+.drag-handle {
+  cursor: grab;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Panel card hover */
+.panel-card {
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+.panel-card:hover {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+}
+
+/* Dragging state */
+.panel-card.dragging {
+  opacity: 0.5;
+  transform: scale(0.98);
+}
