@@ -25,7 +25,7 @@ type Mode = "url" | "file";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function Home() {
-  const [mode, setMode] = useState<Mode>("url");
+  const [mode, setMode] = useState<Mode>("file");
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
@@ -188,7 +188,7 @@ export default function Home() {
                 color: mode === m ? "#fff" : "var(--muted)",
               }}
             >
-              {m === "url" ? "YouTube URL" : "Upload File"}
+              {m === "url" ? "YouTube URL (only works locally)" : "Upload File"}
             </button>
           ))}
         </div>
