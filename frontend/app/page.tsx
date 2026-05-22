@@ -72,7 +72,7 @@ export default function Home() {
       const data = await res.json();
       setPanels(data.panels);
       setStatus("done");
-      if (!title) setTitle(defaultTitle);
+      if (!title) setTitle(data.title || defaultTitle);
     } catch (e: any) {
       clearInterval(interval);
       setError(e.message || "Something went wrong");

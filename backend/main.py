@@ -41,8 +41,8 @@ def health():
 @app.post("/extract")
 async def extract(req: ExtractRequest):
     try:
-        panels = extract_panels(req.url)
-        return {"panels": panels}
+        panels, title = extract_panels(req.url)
+        return {"panels": panels, "title": title}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

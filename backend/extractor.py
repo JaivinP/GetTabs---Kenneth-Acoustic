@@ -25,6 +25,17 @@ MIN_TAB_BRIGHTNESS    = 40     # mean gray (0–255) for tab to count as visible
 VIDEO_END_FRACTION    = 0.95   # stop scanning here to avoid fade-out panels
 
 
+def get_video_title(url: str) -> str:
+    """Fetch the video title using yt-dlp without downloading."""
+    result = subprocess.run(
+        ["yt-dlp", "--no-playlist", "--print", "title", url],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return ""
+
+
 def download_video(url: str, output_path: str) -> str:
     """Download YouTube video to output_path using yt-dlp."""
     print(f"[extractor] Downloading: {url}")
@@ -160,13 +171,15 @@ def detect_panel_jumps(frames, fps: float = 2.0) -> list:
     return panels
 
 
-def extract_panels(url: str) -> list:
-    """Full pipeline: download → stream frames → detect jumps → return panel image dicts."""
+def extract_panels(url: str) -> tuple:
+    """Full pipeline: download → stream frames → detect jumps → return (panels, title)."""
+    title = get_video_title(url)
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "video.mp4")
         download_video(url, video_path)
         fps = 2.0
-        return detect_panel_jumps(extract_frames(video_path, fps=fps), fps=fps)
+        panels = detect_panel_jumps(extract_frames(video_path, fps=fps), fps=fps)
+    return panels, title
 
 
 def extract_panels_from_file(file_bytes: bytes) -> list:
