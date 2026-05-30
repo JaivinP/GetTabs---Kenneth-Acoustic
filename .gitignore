@@ -6,4 +6,5 @@ __pycache__/
 node_modules/
 .next/
 /tmp/
-*.DS_Store
+.DS_Store
+**/.DS_Store
